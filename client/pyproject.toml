@@ -1,0 +1,16 @@
+[project]
+name = "client-app"
+version = "0.1.0"
+description = "Streamlit Client + LangGraph Agent"
+requires-python = ">=3.13"
+dependencies = [
+    "streamlit",
+    "langgraph",
+    "langchain",
+    "langchain-openai",
+    "langchain-core",
+    "mcp[cli]" # We might need mcp client tools
+]
+
+[tool.uv]
+package = false

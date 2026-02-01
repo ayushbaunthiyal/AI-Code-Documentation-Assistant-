@@ -1,0 +1,23 @@
+[project]
+name = "mcp-server"
+version = "0.1.0"
+description = "MCP Server for Code Analysis with Memgraph and Tree-sitter"
+requires-python = ">=3.13"
+dependencies = [
+    "fastmcp",
+    "gqlalchemy",
+    "gitpython",
+    "tree-sitter",
+    "tree-sitter-python",
+    "tree-sitter-javascript",
+    "tree-sitter-typescript",
+    "tree-sitter-go",
+    "tree-sitter-java",
+    "pydantic",
+    "pydantic-settings",
+    "structlog",
+    "python-json-logger"
+]
+
+[tool.uv]
+package = false

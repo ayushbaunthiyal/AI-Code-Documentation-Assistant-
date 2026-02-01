@@ -1,0 +1,43 @@
+services:
+  memgraph:
+    image: memgraph/memgraph-platform:latest
+    ports:
+      - "7687:7687" # Bolt port for connection
+      - "7444:7444" # Logs
+      - "3000:3000" # Memgraph Lab (UI)
+    environment:
+      - MEMGRAPH_USER=memgraph
+      - MEMGRAPH_PASSWORD=memgraph
+    volumes:
+      - memgraph_data:/var/lib/memgraph
+
+  mcp_server:
+    build: ./mcp_server
+    environment:
+      - MEMGRAPH_URI=bolt://memgraph:7687
+      - MEMGRAPH_USER=memgraph
+      - MEMGRAPH_PASSWORD=memgraph
+    volumes:
+      - ./mcp_server:/app
+      - ./:/codebase_mount:ro # Read-only mount of the repo itself for analysis
+      - /app/.venv
+    depends_on:
+      - memgraph
+    command: [ "uv", "run", "python", "main.py" ]
+
+  client:
+    build: ./client
+    ports:
+      - "8503:8503"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - MCP_SERVER_HOST=mcp_server
+    volumes:
+      - ./client:/app
+      - /app/.venv
+    depends_on:
+      - mcp_server
+    command: [ "uv", "run", "streamlit", "run", "app.py", "--server.port=8503", "--server.address=0.0.0.0", "--server.enableCORS=false", "--server.enableXsrfProtection=false" ]
+
+volumes:
+  memgraph_data:
