@@ -11,7 +11,12 @@ class GraphService:
     Service for Graph Database interactions (Ingestion & Querying).
     """
     def __init__(self):
-        self.memgraph = Memgraph(host=settings.MEMGRAPH_HOST, port=settings.MEMGRAPH_PORT)
+        self.memgraph = Memgraph(
+            host=settings.MEMGRAPH_HOST, 
+            port=settings.MEMGRAPH_PORT,
+            username=settings.MEMGRAPH_USER,
+            password=settings.MEMGRAPH_PASSWORD
+        )
         self.parser_service = ParserService()
     
     def check_connection(self):
@@ -82,25 +87,41 @@ class GraphService:
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 content_str = f.read()
             
-            # Create File Node
+            # Create File Node (ALWAYS, even if parsing fails)
+            logger.debug("Creating File node", path=rel_path, ext=ext)
             query = "MERGE (f:File {path: $path}) SET f.language = $lang"
             self.memgraph.execute(query, {"path": rel_path, "lang": ext})
 
-            # Parse
+            # Parse (only for supported extensions)
             tree = self.parser_service.parse(content_str, ext)
             if tree:
-                for type_, name in self.parser_service.extract_structure(tree.root_node, bytes(content_str, "utf8")):
-                    self._create_node(type_, name, rel_path)
+                logger.debug("Parsed file successfully", path=rel_path)
+                for type_, name, extra_info in self.parser_service.extract_structure(tree.root_node, bytes(content_str, "utf8")):
+                    self._create_node(type_, name, rel_path, extra_info)
+            else:
+                logger.debug("No parser for extension or parse failed", path=rel_path, ext=ext)
 
         except Exception as e:
-            logger.warn("Failed to process file", file=rel_path, error=str(e))
+            logger.warning("Failed to process file", file=rel_path, error=str(e))
 
-    def _create_node(self, type_: str, name: str, file_path: str):
-        query = f"""
-        MATCH (f:File {{path: '{file_path}'}})
-        MERGE (n:{type_} {{name: '{name}'}})
-        MERGE (n)-[:DEFINED_IN]->(f)
-        """
+    def _create_node(self, type_: str, name: str, file_path: str, extra_info: str = None):
+        # Escape single quotes in name and extra_info to prevent injection
+        safe_name = name.replace("'", "\\'")
+        safe_extra = extra_info.replace("'", "\\'") if extra_info else None
+        
+        if type_ == 'Endpoint' and safe_extra:
+            # Store endpoints with their route decorator
+            query = f"""
+            MATCH (f:File {{path: '{file_path}'}})
+            MERGE (n:Endpoint {{name: '{safe_name}', route: '{safe_extra}'}})
+            MERGE (n)-[:DEFINED_IN]->(f)
+            """
+        else:
+            query = f"""
+            MATCH (f:File {{path: '{file_path}'}})
+            MERGE (n:{type_} {{name: '{safe_name}'}})
+            MERGE (n)-[:DEFINED_IN]->(f)
+            """
         self.memgraph.execute(query)
 
     def execute_cypher(self, query: str):

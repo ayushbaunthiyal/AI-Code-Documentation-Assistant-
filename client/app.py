@@ -1,11 +1,18 @@
 import streamlit as st
 import os
 import io
-from agent import graph
+from agent import graph, get_graph_stats
+import asyncio
 from langchain_core.messages import HumanMessage, AIMessage
 
 # Page Config
 st.set_page_config(page_title="AI Code Doc Assistant", layout="wide")
+
+# Session State for Single Repo (MUST be initialized BEFORE use)
+if "current_repo" not in st.session_state:
+    st.session_state.current_repo = None
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
 # Sidebar
 with st.sidebar:
@@ -13,12 +20,30 @@ with st.sidebar:
     openai_key = st.text_input("OpenAI API Key", type="password", value=os.getenv("OPENAI_API_KEY", ""))
     if openai_key:
         os.environ["OPENAI_API_KEY"] = openai_key
+    
+    # Stats
+    if st.session_state.current_repo:
+        st.divider()
+        st.markdown("### 📊 Knowledge Graph")
+        
+        # Auto-fetch if missing
+        if "graph_stats" not in st.session_state:
+             import asyncio
+             try:
+                 st.session_state.graph_stats = asyncio.run(get_graph_stats())
+             except Exception as e:
+                 st.session_state.graph_stats = (0, 0)
+        
+        n, e = st.session_state.graph_stats
+        c1, c2 = st.columns(2)
+        c1.metric("Nodes", n)
+        c2.metric("Edges", e)
+        
+        if st.button("Refresh Stats"):
+            del st.session_state.graph_stats
+            st.rerun()
 
-# Session State for Single Repo
-if "current_repo" not in st.session_state:
-    st.session_state.current_repo = None
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+
 
 st.title("🔍 codebase Reverse Engineer Agent")
 
@@ -34,7 +59,7 @@ if st.session_state.current_repo is None:
             import asyncio
             from agent import ingest_codebase
             
-            st.write("📦 Cloning codebase...")
+            st.write("🧹 Cleaning Database & 📦 Cloning Codebase...")
             try:
                 st.write("⚙️ Parsing AST & Building Knowledge Graph (Memgraph)...")
                 
@@ -51,6 +76,10 @@ if st.session_state.current_repo is None:
                 
                 # NOW set the state to locked
                 st.session_state.current_repo = repo_url
+                
+                # Clear cached stats so sidebar fetches fresh values
+                if "graph_stats" in st.session_state:
+                    del st.session_state.graph_stats
                 
             except Exception as e:
                 st.error(f"Ingestion failed: {e}")

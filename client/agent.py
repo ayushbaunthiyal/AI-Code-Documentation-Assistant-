@@ -1,5 +1,6 @@
 import os
 import asyncio
+import ast
 from typing import Annotated, Literal, TypedDict, List, Any
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
@@ -38,6 +39,41 @@ async def ingest_codebase(repo_url: str):
     """
     print(f"Triggering ingestion for {repo_url}...")
     return await call_mcp_tool("ingest_repository", {"source": repo_url})
+
+# --- Tool Helpers ---
+
+async def get_graph_stats():
+    """
+    Fetches node and edge counts from the graph.
+    """
+    try:
+        n_res = await call_mcp_tool("cypher_query", {"query": "MATCH (n) RETURN count(n) as c"})
+        e_res = await call_mcp_tool("cypher_query", {"query": "MATCH ()-[r]->() RETURN count(r) as c"})
+        
+        # MCP tool returns a list of TextContent objects or similar
+        # Extract the text content first
+        def extract_text(result):
+            if hasattr(result, 'content'):
+                # It's a result object with content list
+                if isinstance(result.content, list) and len(result.content) > 0:
+                    return result.content[0].text
+                return str(result.content)
+            elif isinstance(result, list) and len(result) > 0:
+                if hasattr(result[0], 'text'):
+                    return result[0].text
+                return str(result[0])
+            return str(result)
+        
+        n_text = extract_text(n_res)
+        e_text = extract_text(e_res)
+        
+        # Parse string result: "[{'c': 123}]"
+        n_val = ast.literal_eval(n_text)[0]['c']
+        e_val = ast.literal_eval(e_text)[0]['c']
+        return n_val, e_val
+    except Exception as e:
+        print(f"Stats error: {e}")
+        return 0, 0
 
 # --- Prompts ---
 
@@ -120,11 +156,55 @@ async def mapper_agent(state: AgentState):
     """
     messages = state['messages']
     
-    # In a full impl, we'd parse the LLM output to run tools.
-    # For now, we rely on the pre-filled graph data.
+    # Query the ACTUAL graph for real data
+    try:
+        # Get all classes
+        classes_result = await call_mcp_tool("cypher_query", {"query": "MATCH (c:Class) RETURN c.name LIMIT 20"})
+        
+        # Get all functions
+        functions_result = await call_mcp_tool("cypher_query", {"query": "MATCH (f:Function) RETURN f.name LIMIT 30"})
+        
+        # Get API endpoints (FastAPI routes)
+        endpoints_result = await call_mcp_tool("cypher_query", {"query": "MATCH (e:Endpoint) RETURN e.name, e.route LIMIT 20"})
+        
+        # Get all files with their language
+        files_result = await call_mcp_tool("cypher_query", {"query": "MATCH (f:File) RETURN f.path, f.language LIMIT 30"})
+        
+        # Get relationships (what is defined where)
+        relationships_result = await call_mcp_tool("cypher_query", {"query": "MATCH (n)-[:DEFINED_IN]->(f:File) RETURN labels(n)[0] as type, n.name, f.path LIMIT 30"})
+        
+        # Build context message with REAL data
+        context = f"""## ACTUAL DATA FROM CODEBASE (Memgraph Knowledge Graph):
+
+### Files in Repository:
+{files_result}
+
+### API Endpoints (FastAPI Routes):
+{endpoints_result}
+
+### Classes:
+{classes_result}
+
+### Functions:
+{functions_result}
+
+### Code Structure (What is defined where):
+{relationships_result}
+
+CRITICAL INSTRUCTIONS:
+1. Use ONLY the data above to answer questions
+2. If asked about language: Look at file extensions (.py = Python, .js = JavaScript, etc.)
+3. If asked about endpoints: List the actual routes from 'API Endpoints' section
+4. Do NOT make up information not present above
+5. Be CONCISE - answer in 2-3 sentences unless more detail is requested"""
+        
+        context_message = SystemMessage(content=context)
+        
+    except Exception as e:
+        context_message = SystemMessage(content=f"Error querying graph: {e}")
     
     chain = mapper_prompt | llm
-    response = await chain.ainvoke({"messages": messages})
+    response = await chain.ainvoke({"messages": [context_message] + messages})
     return {"messages": [response], "next_step": "SUMMARIZER"}
 
 async def summarizer_agent(state: AgentState):
